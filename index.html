@@ -143,6 +143,27 @@
     #geminiOutput > *:last-child {
         margin-bottom: 0;
     }
+    /* Tighten spacing for rendered Markdown content */
+    .model-content p {
+        margin-top: 0;
+        margin-bottom: 0.75rem; /* Reduced from the default 1rem+ */
+        line-height: 1.6;
+    }
+
+    .model-content ul, .model-content ol {
+        margin-top: 0.5rem;
+        margin-bottom: 0.75rem;
+        padding-left: 1.5rem;
+    }
+
+    .model-content li {
+        margin-bottom: 0.25rem; /* Tightens the gap between bullet points */
+    }
+
+    .model-content h3, .model-content h4 {
+        margin-top: 1.25rem;
+        margin-bottom: 0.5rem;
+    }
 </style>
 </head>
 
@@ -167,12 +188,14 @@ Example: How do I prevent fungal infections in balcony tomato plants during mons
             <h3>🌱 Gemma (Quantized)</h3>
             <div class="meta" id="gemmaMeta"></div>
             <div class="output" id="gemmaOutput"></div>
+            <button id="voteGemma" style="display:none; margin-top:10px;" onclick="vote('Gemma')">I prefer Gemma</button>
         </div>
 
         <div class="card">
             <h3>☁️ Gemini 2.5 Flash Lite</h3>
             <div class="meta" id="geminiMeta"></div>
             <div class="output" id="geminiOutput"></div>
+            <button id="voteGemini" style="display:none; margin-top:10px;" onclick="vote('Gemini')">I prefer Gemini</button>
         </div>
     </div>
 
@@ -180,7 +203,8 @@ Example: How do I prevent fungal infections in balcony tomato plants during mons
 
 <script>
 
-const BACKEND_BASE_URL = "http://127.0.0.1:7860"; // CHANGE THIS
+// const BACKEND_BASE_URL = "http://127.0.0.1:7860";
+const BACKEND_BASE_URL = "https://sayan7c6-gemma3-utlg.hf.space";
 
 async function callModel(endpoint, prompt) {
     const startTime = performance.now();
@@ -201,8 +225,24 @@ async function callModel(endpoint, prompt) {
 
     const data = await response.json();
     const rawMarkdown = data.response[0] || "No response received.";
-    // Clean up excessive newlines: replace 2+ newlines with just 1
-    const cleanedMarkdown = rawMarkdown.replace(/\n{2,}/g, '\n').trim();
+    
+    let cleanedMarkdown;
+
+    if (endpoint.includes("gemma")) {
+        // AGGRESSIVE: Tighten lists for Gemma's conversational style
+        cleanedMarkdown = rawMarkdown
+            .replace(/\r\n/g, '\n')
+            .replace(/\n\s*\n\s*\n/g, '\n\n')
+            .replace(/\n\n([\*\-\d\.])/g, '\n$1') // Remove gaps before list items
+            .trim();
+    } else {
+        // GENTLE: Preserve gaps for Gemini's structured formatting
+        cleanedMarkdown = rawMarkdown
+            .replace(/\r\n/g, '\n')
+            .replace(/\n\s*\n\s*\n/g, '\n\n') // Only collapse 3+ into 2
+            .trim();
+    }
+    
     // 1. Convert Markdown to HTML
     const dirtyHTML = marked.parse(cleanedMarkdown);
     // 2. Sanitize the HTML for safety
@@ -219,38 +259,87 @@ async function submitQuery() {
     const errorDiv = document.getElementById("errorMessage");
     const gemmaOutput = document.getElementById("gemmaOutput");
     const geminiOutput = document.getElementById("geminiOutput");
+    
+    // Get references to the voting buttons
+    const voteGemma = document.getElementById("voteGemma");
+    const voteGemini = document.getElementById("voteGemini");
 
     if (!input) {
         errorDiv.textContent = "Please enter a question.";
         return;
     }
 
+    // 1. Reset UI State
     errorDiv.textContent = "";
     gemmaOutput.innerHTML = "Loading...";
     geminiOutput.innerHTML = "Loading...";
+    
+    // Hide buttons at the start of a new query
+    if (voteGemma) voteGemma.style.display = "none";
+    if (voteGemini) voteGemini.style.display = "none";
 
-    // 1. Fire off both requests
+    // 2. Fire off both requests
     const gemmaPromise = callModel("/api/gemma", input);
     const geminiPromise = callModel("/api/gemini", input);
 
-    // 2. Handle Gemma result as soon as it arrives
+    // 3. Handle Gemma result as soon as it arrives
     gemmaPromise.then(result => {
         gemmaOutput.innerHTML = result.text;
         document.getElementById("gemmaMeta").textContent = `Latency: ${result.latency} ms`;
+        
+        // Show Gemma vote button on success
+        if (voteGemma) voteGemma.style.display = "block";
     }).catch(err => {
         gemmaOutput.innerHTML = "<span style='color:red'>Gemma failed to respond.</span>";
     });
 
-    // 3. Handle Gemini result as soon as it arrives
+    // 4. Handle Gemini result as soon as it arrives
     geminiPromise.then(result => {
         geminiOutput.innerHTML = result.text;
         document.getElementById("geminiMeta").textContent = `Latency: ${result.latency} ms`;
+        
+        // Show Gemini vote button on success
+        if (voteGemini) voteGemini.style.display = "block";
     }).catch(err => {
         geminiOutput.innerHTML = "<span style='color:red'>Gemini failed to respond.</span>";
     });
 }
 
-</script>
+async function vote(selectedModel) {
+    const prompt = document.getElementById("userInput").value.trim();
+    const gemmaText = document.getElementById("gemmaOutput").innerText;
+    const geminiText = document.getElementById("geminiOutput").innerText;
 
+    // Optional: Visual feedback that the vote is being processed
+    const buttons = [document.getElementById("voteGemma"), document.getElementById("voteGemini")];
+    buttons.forEach(btn => btn.disabled = true);
+
+    try {
+        const response = await fetch(`${BACKEND_BASE_URL}/api/vote`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                prompt: prompt,
+                gemma_response: gemmaText,
+                gemini_response: geminiText,
+                preference: selectedModel
+            })
+        });
+
+        if (response.ok) {
+            alert("Thanks! Your preference has been saved to the UrbanTreelogy dataset.");
+            buttons.forEach(btn => btn.style.display = "none");
+        } else {
+            throw new Error("Failed to save vote");
+        }
+    } catch (err) {
+        console.error("Voting error:", err);
+        alert("Could not save your preference at this time.");
+    } finally {
+        buttons.forEach(btn => btn.disabled = false);
+    }
+}
+
+</script>
 </body>
 </html>
